@@ -202,6 +202,27 @@ class SyncTests(unittest.TestCase):
         rc, out = run(a.url, a.url)
         self.assertEqual(rc, 2, out)
 
+    def test_same_machine_under_another_spelling_is_refused(self):
+        a = self.fake()
+        other_spelling = a.url.replace("127.0.0.1", "localhost")
+        rc, out = run(a.url, other_spelling)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("same machine", out)
+        self.assertEqual([r for r in a.seen if r[0] != "GET"], [])
+
+    def test_session_is_renewed_after_a_dns_only_change(self):
+        # Only the dns settings differ; the secondary forgets its sessions when it
+        # applies them, as FTL can. The run must still end cleanly.
+        a = self.fake(password="primary-pw")
+        a.state["dns"]["hosts"].append("192.0.2.11 b.lan.example")
+        b = self.fake(password="secondary-pw")
+        b.source_state = a.state
+        rc, out = run(a.url, b.url, env_extra={"PRIMARY_PASSWORD_FILE": self.pw_primary,
+                                               "SECONDARY_PASSWORD_FILE": self.pw_secondary})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(b.state["dns"]["hosts"], a.state["dns"]["hosts"])
+        self.assertEqual(b.seen.count(("POST", "/api/auth")), 3)  # login, again after the change, again for the final check
+
 
 if __name__ == "__main__":
     unittest.main()

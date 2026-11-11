@@ -26,10 +26,12 @@ Exit codes: 0 in sync (or synced), 1 primary or secondary unreachable,
 """
 import json
 import os
+import socket
 import sys
 import time
 import http.client
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -102,8 +104,8 @@ def logout(base, sid):
     if sid:
         try:
             call(base, "DELETE", "/auth", sid=sid)
-        except Exception:
-            pass
+        except Exception as e:  # a session that is not closed counts against the API's session limit
+            log("could not close the session on %s: %s" % (base, e))
 
 
 def wait_api(base, seconds=240):
@@ -168,12 +170,23 @@ def multipart(file_bytes, import_json):
     return b"".join(parts), "multipart/form-data; boundary=%s" % boundary
 
 
+def endpoints(url):
+    """The (address, port) pairs a URL points at, so that two spellings of one
+    machine (name and number, localhost and 127.0.0.1) compare equal."""
+    u = urllib.parse.urlsplit(url)
+    port = u.port or (443 if u.scheme == "https" else 80)
+    try:
+        return {(a[4][0], port) for a in socket.getaddrinfo(u.hostname, port, proto=socket.IPPROTO_TCP)}
+    except socket.gaierror:
+        return {(u.hostname, port)}
+
+
 def main():
     if not PRIMARY or not SECONDARY:
         log("PRIMARY_URL and SECONDARY_URL must be set")
         return 2
-    if PRIMARY == SECONDARY:
-        log("primary and secondary are the same address, refusing")
+    if PRIMARY == SECONDARY or endpoints(PRIMARY) & endpoints(SECONDARY):
+        log("primary and secondary are the same machine, refusing")
         return 2
     psid = ssid = None
     try:
@@ -231,6 +244,7 @@ def main():
             if not wait_api(SECONDARY):
                 log("the secondary did not come back after the dns change")
                 return 2
+            ssid = login(SECONDARY, "SECONDARY_PASSWORD_FILE")
         # Allow/deny entries and clients work without a gravity run; new or
         # changed adlists and groups need one.
         if "lists" in gravity_diff or "groups" in gravity_diff:
