@@ -1,0 +1,8 @@
+# Local state and secrets never go into the repo.
+.env
+secrets/
+html/
+data/
+db/
+*.sql
+*.sql.gz
