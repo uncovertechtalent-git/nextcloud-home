@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly Nextcloud backup
+
+[Timer]
+# 01:15 local time: before Nextcloud's heavy background jobs (01:00 UTC on).
+OnCalendar=*-*-* 01:15:00
+RandomizedDelaySec=5min
+# Run once at boot if the machine was off at 01:15.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

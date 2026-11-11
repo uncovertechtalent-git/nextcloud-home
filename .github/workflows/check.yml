@@ -1,0 +1,28 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scripts-and-compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: shellcheck
+        run: |
+          shellcheck -s bash backup/nextcloud-backup.sh
+          shellcheck -s sh scripts/*.sh
+      - name: compose file parses with a fresh .env and fresh secrets
+        run: |
+          cp .env.example .env
+          sh scripts/init-secrets.sh
+          docker compose config -q
+      - name: systemd units verify
+        run: |
+          sudo install -m 755 backup/nextcloud-backup.sh /usr/local/sbin/nextcloud-backup
+          systemd-analyze verify backup/nextcloud-backup.service backup/nextcloud-backup.timer
