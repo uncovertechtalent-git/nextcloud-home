@@ -1,0 +1,26 @@
+{
+	# Set ACME_CA to the Let's Encrypt staging URL while testing.
+	acme_ca {$ACME_CA}
+	admin 127.0.0.1:2019
+}
+
+# One wildcard site for the whole LAN domain. The certificate is a single
+# wildcard certificate obtained with the DNS-01 challenge through Route 53, so
+# no service name appears in the public certificate-transparency logs and no
+# port of this machine is opened to the internet.
+#
+# One file per service in ./sites (see sites.example/), each matching one host
+# name inside this block.
+*.{$LAN_DOMAIN} {
+	tls {
+		dns route53 {
+			hosted_zone_id {$ROUTE53_ZONE_ID}
+		}
+	}
+
+	import /etc/caddy/sites/*.caddy
+
+	handle {
+		respond "No service of that name here." 404
+	}
+}

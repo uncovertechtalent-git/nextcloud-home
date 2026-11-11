@@ -1,0 +1,11 @@
+# A web service on this machine or on another host, plain HTTP behind Caddy.
+@grafana host grafana.{$LAN_DOMAIN}
+handle @grafana {
+	reverse_proxy 127.0.0.1:3000
+}
+
+# Same, on another machine of the network.
+@other host other.{$LAN_DOMAIN}
+handle @other {
+	reverse_proxy other-host-address:8000
+}
