@@ -26,7 +26,7 @@ backup/
 | Cache and locks | `redis:7-alpine`, no password, no published port | Only containers of this stack can reach it. A password file does not work here: Nextcloud reads it at run time as the web user, and a mode-600 secret is unreadable to that user. |
 | Background jobs | a second container runs `cron.php` | The "cron" mode, as Nextcloud recommends. |
 | Port | host port `8380` (`NC_PORT`), plain HTTP | Pick any free high port. TLS is a separate step, see "Not done". |
-| Exposure | bound to all interfaces of the machine; no router port forward, no public DNS | The LAN interface and the Tailscale interface are the two ways in. |
+| Exposure | bound to all interfaces of the machine; no router port forward, no public DNS | The LAN interface and the Tailscale interface are the two ways in. This holds only while the machine has no other routable interface and the router forwards nothing to it. If that changes, bind to the specific addresses (`NC_BIND_ADDRESS`, one port mapping per address) or add a host firewall. |
 | Secrets | files under `./secrets` (directory 700, files 600), passed in with compose secrets and the images' `*_FILE` variables | No password in the compose file, in `.env`, in the repo, or in a command line. |
 | Data | bind mounts `./data`, `./html`, `./db` next to the compose file | Easy to find and to back up. |
 
@@ -101,7 +101,7 @@ A run that dies leaves `*.partial` files and, if it was a first full run, a gene
 
 Retention: the newest 28 database dumps and config archives (`KEEP`), and the newest 4 generations of data archives (`KEEP_GENERATIONS`). Besides the leftovers above, the script deletes only names that match its own stamp pattern (`YYYY-MM-DD_HHMMSS`) inside `NAS_DIR`.
 
-The config archive contains `config.php` and the database passwords. That is what makes a restore possible, and it is why `NAS_DIR` is mode 700 and owned by root.
+The config archive contains `config.php` and the database passwords, in every retained night. That is what makes a restore possible, and it is why `NAS_DIR` is mode 700 and owned by root. Keep it that way: never publish `NAS_DIR` or a folder above it through SMB, NFS or a sync service to other users, and check it after NAS updates with `sudo ls -ld <NAS_DIR>` on the NAS.
 
 ### Why tar over ssh and not rsync
 
