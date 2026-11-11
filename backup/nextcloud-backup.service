@@ -7,7 +7,8 @@ Requires=docker.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/nextcloud-backup
-# A first run over a big data directory can take hours.
-TimeoutStartSec=6h
+# A first run over a big data directory can take many hours. A hung ssh
+# connection is cut by the ServerAlive settings in the script, not by this.
+TimeoutStartSec=24h
 Nice=10
 IOSchedulingClass=idle

@@ -24,5 +24,5 @@ done
 occ db:add-missing-indices
 occ maintenance:repair --include-expensive
 
-occ app:list --output=json |
-  python3 -c 'import sys, json; d = json.load(sys.stdin)["enabled"]; print("enabled:", ", ".join(a for a in ("calendar", "contacts", "spreed", "notes", "deck", "files") if a in d))'
+# Show what is switched on among the five.
+occ app:list | sed -n '/^Enabled:/,/^Disabled:/p' | grep -E '^  - (calendar|contacts|spreed|notes|deck):'

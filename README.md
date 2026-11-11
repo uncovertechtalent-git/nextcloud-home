@@ -91,13 +91,15 @@ A run takes these steps:
 5. Database dump (`mariadb-dump --single-transaction`), compressed and checked with `gzip -t`.
 6. Maintenance mode off, `LAST_OK` written, old backups removed.
 
-In steps 3 to 6 Nextcloud answers with its maintenance page. With a small data directory that is a few seconds; it grows with the amount of data that changed since pass 1. If anything fails after step 3, the script's exit handler turns maintenance mode off again.
+In steps 3 to 6 Nextcloud answers with its maintenance page. Pass 2 still has to walk the whole data tree to find what changed, so this window grows with the number of files, not only with the amount of change; with a small data directory it is a few seconds. If anything fails after step 3, the script's exit handler turns maintenance mode off again. If the machine dies in that window, a marker file in the state directory tells the next run to turn it off before it starts.
 
 The data archives are GNU tar incremental. The first run of a week (Sundays, or whenever the state is missing) starts a new generation with a full archive; every later archive holds what changed since the one before. The incremental state is kept on the Nextcloud machine in `/var/lib/nextcloud-backup`; if it is lost, the next run simply starts a new full generation. Preview images are not backed up (Nextcloud rebuilds them). `secrets/admin_password` is not backed up either (see Install).
 
 Every upload is checked: the byte count that tar reports must equal the size of the file on the NAS, or the run fails and the file is not renamed into place. A run takes the lock `/run/lock/nextcloud-backup.lock`, so two runs never overlap.
 
-Retention: the newest 28 database dumps and config archives (`KEEP`), and the newest 4 generations of data archives (`KEEP_GENERATIONS`). The script deletes only names that match its own stamp pattern inside `NAS_DIR`.
+A run that dies leaves `*.partial` files and, if it was a first full run, a generation folder without its full archive. Neither is ever used: the next run deletes `*.partial` files older than a day and removes generation folders that have no full archive, and a generation whose full archive has gone missing is replaced by a new one.
+
+Retention: the newest 28 database dumps and config archives (`KEEP`), and the newest 4 generations of data archives (`KEEP_GENERATIONS`). Besides the leftovers above, the script deletes only names that match its own stamp pattern (`YYYY-MM-DD_HHMMSS`) inside `NAS_DIR`.
 
 The config archive contains `config.php` and the database passwords. That is what makes a restore possible, and it is why `NAS_DIR` is mode 700 and owned by root.
 
@@ -136,7 +138,7 @@ Nothing in this repo alerts when the job stops. `LAST_OK` on the NAS and `system
 
 ## Restore
 
-The order matters: configuration first, then the data, then the database, then the containers. Do it as root on the machine that will run Nextcloud, which can be a new machine. A restore point is a database dump plus the data archives up to the same stamp; the commands below use the newest of each.
+The order matters: configuration first, then the data, then the database, then the containers. Do it as root on the machine that will run Nextcloud, which can be a new machine. A restore point is one stamp: the database dump `nextcloud-<stamp>.sql.gz`, the config archive of that stamp, and the data archives of its generation up to `<stamp>-b.tar`. The commands below take the stamp of the last run that finished (`LAST_OK`); only finished runs are in `LAST_OK`, so half-written files are never picked.
 
 ```sh
 # Settings for reaching the NAS. On a new machine, recreate /etc/nextcloud-home/backup.env
@@ -146,6 +148,10 @@ nas() { ssh -n -i "$SSH_KEY" -o UserKnownHostsFile="$KNOWN_HOSTS" "$NAS_TARGET" 
 
 STACK=/path/to/stack            # the folder that will hold docker-compose.yml, data/, db/ ...
 mkdir -p "$STACK/scripts" && cd "$STACK"
+
+stamp=$(nas "sudo cat $NAS_DIR/LAST_OK")     # for an earlier restore point use a stamp from db/ instead
+gen=$(nas "sudo find $NAS_DIR/data -name '$stamp-b.tar'" | sed 's#/[^/]*$##; s#.*/##')
+echo "restoring stamp $stamp from generation $gen"
 ```
 
 1. **Compose files.** Copy `docker-compose.yml` and `scripts/init-secrets.sh` from this repository into `$STACK` (the config archive also holds the compose file).
@@ -153,21 +159,18 @@ mkdir -p "$STACK/scripts" && cd "$STACK"
 2. **Config.** Restores `html/config`, `html/custom_apps`, `html/themes`, `secrets/`, `.env` and `docker-compose.yml`. The backup leaves out the admin password file; `init-secrets.sh` recreates exactly the missing file and keeps the others.
 
    ```sh
-   cfg=$(nas "sudo ls -1 $NAS_DIR/config" | sort | tail -1)
-   nas "sudo cat $NAS_DIR/config/$cfg" | tar -x --numeric-owner -C "$STACK"
+   nas "sudo cat $NAS_DIR/config/config-$stamp.tar" | tar -x --numeric-owner -C "$STACK"
    sh scripts/init-secrets.sh
    ```
 
-3. **Data.** Apply every archive of the newest generation in name order, oldest first. `--listed-incremental=/dev/null` makes tar apply the deletions recorded in the incremental archives as well.
+3. **Data.** Apply the archives of the generation in name order, oldest first, up to and including `<stamp>-b.tar`. `--listed-incremental=/dev/null` makes tar apply the deletions recorded in the incremental archives as well.
 
    ```sh
-   gen=$(nas "sudo ls -1 $NAS_DIR/data" | sort | tail -1)
-   for a in $(nas "sudo ls -1 $NAS_DIR/data/$gen" | sort); do
+   for a in $(nas "sudo ls -1 $NAS_DIR/data/$gen" | grep '\.tar$' | sort | sed "/^$stamp-b\.tar\$/q"); do
+     echo "apply $a"
      nas "sudo cat $NAS_DIR/data/$gen/$a" | tar -x --numeric-owner --listed-incremental=/dev/null -C "$STACK"
    done
    ```
-
-   To go back to an earlier day, stop the loop after the archives of that day (names starting with that date) and use the dump of that day in step 4. To go back past the newest generation, use an older folder under `data/`.
 
 4. **Database.** Start only the database, wait until it is healthy, load the dump.
 
@@ -175,8 +178,7 @@ mkdir -p "$STACK/scripts" && cd "$STACK"
    mkdir -p db html
    docker compose up -d db
    until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q db)")" = healthy ]; do sleep 3; done
-   dump=$(nas "sudo ls -1 $NAS_DIR/db" | sort | tail -1)
-   nas "sudo cat $NAS_DIR/db/$dump" | gunzip |
+   nas "sudo cat $NAS_DIR/db/nextcloud-$stamp.sql.gz" | gunzip |
      docker compose exec -T db sh -c 'MYSQL_PWD="$(cat /run/secrets/db_root_password)" exec mariadb -u root nextcloud'
    ```
 
@@ -189,13 +191,14 @@ mkdir -p "$STACK/scripts" && cd "$STACK"
    The first start prints `Command "maintenance:install" is not defined` several times and the app container restarts once, after about two minutes. That is the image's installer finding an installation that already exists; the second start is clean. Then:
 
    ```sh
+   docker compose exec -u www-data app php occ upgrade                        # needed if the image is a newer 35.x than the backup
    docker compose exec -u www-data app php occ maintenance:update:htaccess   # without it /login answers 404
    docker compose exec -u www-data app php occ maintenance:data-fingerprint  # tells sync clients the data went back in time
    ```
 
    Log in. If files were uploaded after the dump you used, `occ files:scan --all` brings the file index in line with the disk.
 
-On 2026-11-11 the newest backup was restored with these commands into a second instance on the same machine (only the port in `.env` and the compose project name differed): same version, same users and apps, login with the live admin password worked, and the data matched the live copy except for the preview images.
+On 2026-11-11 the newest backup was restored with these commands into a second instance on the same machine (only the port in `.env` and the compose project name differed): same version, same users and apps, login with the live admin password worked, and the data matched the live copy except for the preview images. `occ upgrade` was run there and had nothing to do; restoring into a newer image than the backup was not tried.
 
 To get a single file back without a full restore, extract just that path from the archives (`tar -x --listed-incremental=/dev/null -f <archive> data/<user>/files/<path>`), newest archive that contains it last.
 
