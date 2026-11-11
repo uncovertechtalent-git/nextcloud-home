@@ -39,4 +39,4 @@ jobs:
             -e ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory \
             -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/sites:/etc/caddy/sites:ro" \
             lan-proxy-caddy:ci caddy validate --config /etc/caddy/Caddyfile
-          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" lan-proxy-caddy:ci caddy fmt /etc/caddy/Caddyfile >/dev/null
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" lan-proxy-caddy:ci caddy fmt --diff /etc/caddy/Caddyfile
