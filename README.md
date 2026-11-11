@@ -23,7 +23,7 @@ backup/
 |---|---|---|
 | Nextcloud | `nextcloud:35-apache`, pinned to the 35 line | The `stable` tag trails by one major; 35 has the longest support left. Minor updates arrive with `docker compose pull`. |
 | Database | `mariadb:10.11` (LTS), `READ-COMMITTED` | The supported, well-tested pairing. |
-| Cache and locks | `redis:7-alpine`, no password, no published port | Only containers of this stack can reach it. A password file does not work here: Nextcloud reads it at run time as the web user, and a mode-600 secret is unreadable to that user. |
+| Cache and locks | `redis:7-alpine`, no password, no published port, no memory limit | Only containers of this stack can reach it. A password file does not work here: Nextcloud reads it at run time as the web user, and a mode-600 secret is unreadable to that user. A memory limit with an eviction policy could drop a file-lock key under pressure, so there is none; cache and lock keys expire on their own. |
 | Background jobs | a second container runs `cron.php` | The "cron" mode, as Nextcloud recommends. |
 | Port | host port `8380` (`NC_PORT`), plain HTTP | Pick any free high port. TLS is a separate step, see "Not done". |
 | Exposure | bound to all interfaces of the machine; no router port forward, no public DNS | The LAN interface and the Tailscale interface are the two ways in. This holds only while the machine has no other routable interface and the router forwards nothing to it. If that changes, bind to the specific addresses (`NC_BIND_ADDRESS`, one port mapping per address) or add a host firewall. |
@@ -119,7 +119,9 @@ sudo install -m 644 backup/nextcloud-backup.service backup/nextcloud-backup.time
 sudo systemctl daemon-reload
 ```
 
-`backup.env` names the NAS user and address, the folder on the NAS, the private key and the `known_hosts` file. Log in to the NAS once by hand with that key so the host key is in `known_hosts`; the job refuses unknown hosts. The NAS user needs passwordless `sudo` there.
+`backup.env` names the NAS user and address, the folder on the NAS, the private key and the `known_hosts` file. Log in to the NAS once by hand with that key so the host key is in `known_hosts`; the job refuses unknown hosts.
+
+By default the NAS user needs passwordless `sudo`, and the files are written as root. That means the key in `backup.env` is a root login on the NAS: if the Nextcloud machine is compromised, so is the NAS. The safer set-up is a dedicated NAS user that owns `NAS_DIR` (mode 700), has no `sudo` and has its own key; set `NAS_SUDO=` (empty) in `backup.env` and the job runs without `sudo`. Use the same setting for the restore (the `SUDO` line below).
 
 Run it once by hand and look at the result before you arm the timer:
 
@@ -144,13 +146,14 @@ The order matters: configuration first, then the data, then the database, then t
 # Settings for reaching the NAS. On a new machine, recreate /etc/nextcloud-home/backup.env
 # from backup/backup.env.example first.
 . /etc/nextcloud-home/backup.env
+SUDO=${NAS_SUDO-sudo}                          # empty if the NAS user needs no sudo
 nas() { ssh -n -i "$SSH_KEY" -o UserKnownHostsFile="$KNOWN_HOSTS" "$NAS_TARGET" "$@"; }
 
 STACK=/path/to/stack            # the folder that will hold docker-compose.yml, data/, db/ ...
 mkdir -p "$STACK/scripts" && cd "$STACK"
 
-stamp=$(nas "sudo cat $NAS_DIR/LAST_OK")     # for an earlier restore point use a stamp from db/ instead
-gen=$(nas "sudo find $NAS_DIR/data -name '$stamp-b.tar'" | sed 's#/[^/]*$##; s#.*/##')
+stamp=$(nas "$SUDO cat $NAS_DIR/LAST_OK")     # for an earlier restore point use a stamp from db/ instead
+gen=$(nas "$SUDO find $NAS_DIR/data -name '$stamp-b.tar'" | sed 's#/[^/]*$##; s#.*/##')
 echo "restoring stamp $stamp from generation $gen"
 ```
 
@@ -159,16 +162,16 @@ echo "restoring stamp $stamp from generation $gen"
 2. **Config.** Restores `html/config`, `html/custom_apps`, `html/themes`, `secrets/`, `.env` and `docker-compose.yml`. The backup leaves out the admin password file; `init-secrets.sh` recreates exactly the missing file and keeps the others.
 
    ```sh
-   nas "sudo cat $NAS_DIR/config/config-$stamp.tar" | tar -x --numeric-owner -C "$STACK"
+   nas "$SUDO cat $NAS_DIR/config/config-$stamp.tar" | tar -x --numeric-owner -C "$STACK"
    sh scripts/init-secrets.sh
    ```
 
 3. **Data.** Apply the archives of the generation in name order, oldest first, up to and including `<stamp>-b.tar`. `--listed-incremental=/dev/null` makes tar apply the deletions recorded in the incremental archives as well.
 
    ```sh
-   for a in $(nas "sudo ls -1 $NAS_DIR/data/$gen" | grep '\.tar$' | sort | sed "/^$stamp-b\.tar\$/q"); do
+   for a in $(nas "$SUDO ls -1 $NAS_DIR/data/$gen" | grep '\.tar$' | sort | sed "/^$stamp-b\.tar\$/q"); do
      echo "apply $a"
-     nas "sudo cat $NAS_DIR/data/$gen/$a" | tar -x --numeric-owner --listed-incremental=/dev/null -C "$STACK"
+     nas "$SUDO cat $NAS_DIR/data/$gen/$a" | tar -x --numeric-owner --listed-incremental=/dev/null -C "$STACK"
    done
    ```
 
@@ -178,7 +181,7 @@ echo "restoring stamp $stamp from generation $gen"
    mkdir -p db html
    docker compose up -d db
    until [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q db)")" = healthy ]; do sleep 3; done
-   nas "sudo cat $NAS_DIR/db/nextcloud-$stamp.sql.gz" | gunzip |
+   nas "$SUDO cat $NAS_DIR/db/nextcloud-$stamp.sql.gz" | gunzip |
      docker compose exec -T db sh -c 'MYSQL_PWD="$(cat /run/secrets/db_root_password)" exec mariadb -u root nextcloud'
    ```
 

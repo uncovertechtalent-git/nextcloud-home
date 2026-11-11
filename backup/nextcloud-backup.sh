@@ -42,6 +42,9 @@ CONF="${NEXTCLOUD_BACKUP_ENV:-/etc/nextcloud-home/backup.env}"
 KEEP="${KEEP:-28}"                  # newest db dumps and config archives to keep
 KEEP_GENERATIONS="${KEEP_GENERATIONS:-4}"
 KNOWN_HOSTS="${KNOWN_HOSTS:-/root/.ssh/known_hosts}"
+# Command put in front of the privileged commands on the NAS. Default sudo; set
+# NAS_SUDO= (empty) when NAS_TARGET is a user that owns NAS_DIR and needs none.
+SUDO="${NAS_SUDO-sudo}"
 STATE_DIR="${STATE_DIR:-/var/lib/nextcloud-backup}"
 [ "$KEEP" -ge 1 ] && [ "$KEEP_GENERATIONS" -ge 1 ] || { echo "KEEP and KEEP_GENERATIONS must be at least 1" >&2; exit 64; }
 
@@ -88,12 +91,12 @@ fi
 # rename it into place.
 finish_upload() {
   local rpath=$1 want=$2 got
-  got="$(nas "sudo wc -c -- '$rpath.partial'" | awk '{print $1}')"
+  got="$(nas "$SUDO wc -c -- '$rpath.partial'" | awk '{print $1}')"
   if [ "$want" != "$got" ]; then
     log "size mismatch for $rpath: sent $want, NAS has $got"
     return 1
   fi
-  nas "sudo mv '$rpath.partial' '$rpath'"
+  nas "$SUDO mv '$rpath.partial' '$rpath'"
 }
 
 # tar_up <max tar exit> <remote path> <tar args...> : tar to stdout, stream to
@@ -106,7 +109,7 @@ tar_up() {
   shift 2
   set +e
   tar --totals --numeric-owner --no-check-device -C "$STACK_DIR" -cf - "$@" 2>"$WORK/tar.err" |
-    nas_in "sudo tee -- '$rpath.partial' >/dev/null"
+    nas_in "$SUDO tee -- '$rpath.partial' >/dev/null"
   st=("${PIPESTATUS[@]}")
   set -e
   grep -v -E '^tar: (Removing leading|.*file changed as we read it|.*socket ignored|Total bytes written)' "$WORK/tar.err" >&2 || true
@@ -140,7 +143,7 @@ if [ -z "$GEN" ] || [ ! -s "$STATE_DIR/current.snar" ] || [ "${FORCE_FULL:-0}" =
   new_gen=yes
 elif [ "$(date +%u)" = 7 ] && [ "${GEN%%_*}" != "${STAMP%%_*}" ]; then
   new_gen=yes
-elif ! nas "sudo test -e '$NAS_DIR/data/$GEN/$GEN-a.tar'"; then
+elif ! nas "$SUDO test -e '$NAS_DIR/data/$GEN/$GEN-a.tar'"; then
   log "the full archive of generation $GEN is missing on the NAS"
   new_gen=yes
 fi
@@ -154,7 +157,7 @@ fi
 echo "$GEN" >"$STATE_DIR/current.gen"
 
 log "start $STAMP"
-nas "sudo install -d -m 700 '$NAS_DIR/data/$GEN' '$NAS_DIR/config' '$NAS_DIR/db'"
+nas "$SUDO install -d -m 700 '$NAS_DIR/data/$GEN' '$NAS_DIR/config' '$NAS_DIR/db'"
 
 log "data pass 1, Nextcloud running"
 data_pass a 2
@@ -182,7 +185,7 @@ compose exec -T db sh -c \
 # A dump of a few bytes means the dump command failed quietly.
 [ "$(wc -c <"$WORK/db.sql.gz")" -gt 1000 ] || { log "dump too small, aborting"; exit 1; }
 gzip -t "$WORK/db.sql.gz"
-nas_in "sudo tee -- '$NAS_DIR/db/nextcloud-$STAMP.sql.gz.partial' >/dev/null" <"$WORK/db.sql.gz"
+nas_in "$SUDO tee -- '$NAS_DIR/db/nextcloud-$STAMP.sql.gz.partial' >/dev/null" <"$WORK/db.sql.gz"
 finish_upload "$NAS_DIR/db/nextcloud-$STAMP.sql.gz" "$(wc -c <"$WORK/db.sql.gz")"
 
 log "maintenance mode off"
@@ -191,28 +194,28 @@ MAINT=off
 rm -f "$MARKER"
 
 log "publish"
-echo "$STAMP" | nas_in "sudo tee -- '$NAS_DIR/LAST_OK' >/dev/null"
+echo "$STAMP" | nas_in "$SUDO tee -- '$NAS_DIR/LAST_OK' >/dev/null"
 
 # Prune on this side: list the names, keep the newest, delete the rest by exact
 # name (names must match the stamp pattern, nothing else is touched).
 prune() { # <dir> <name regex> <keep> <rm flags>
-  nas "sudo ls -1 '$NAS_DIR/$1'" | { grep -E "$2" || true; } | sort | head -n "-$3" |
-    while read -r name; do nas "sudo rm $4 -- '$NAS_DIR/$1/$name'"; log "removed $1/$name"; done
+  nas "$SUDO ls -1 '$NAS_DIR/$1'" | { grep -E "$2" || true; } | sort | head -n "-$3" |
+    while read -r name; do nas "$SUDO rm $4 -- '$NAS_DIR/$1/$name'"; log "removed $1/$name"; done
 }
 prune db "^nextcloud-${STAMP_RE}\.sql\.gz\$" "$KEEP" -f
 prune config "^config-${STAMP_RE}\.tar\$" "$KEEP" -f
 # A generation folder without its full archive is what a failed first run
 # leaves behind. Remove those first so they do not count as generations.
-nas "sudo ls -1 '$NAS_DIR/data'" | { grep -E "^${STAMP_RE}\$" || true; } |
+nas "$SUDO ls -1 '$NAS_DIR/data'" | { grep -E "^${STAMP_RE}\$" || true; } |
   while read -r name; do
-    if [ "$name" != "$GEN" ] && ! nas "sudo test -e '$NAS_DIR/data/$name/$name-a.tar'"; then
-      nas "sudo rm -rf -- '$NAS_DIR/data/$name'"
+    if [ "$name" != "$GEN" ] && ! nas "$SUDO test -e '$NAS_DIR/data/$name/$name-a.tar'"; then
+      nas "$SUDO rm -rf -- '$NAS_DIR/data/$name'"
       log "removed incomplete generation $name"
     fi
   done
 prune data "^${STAMP_RE}\$" "$KEEP_GENERATIONS" -rf
 
 # Upload leftovers of runs that failed half way.
-nas "sudo find '$NAS_DIR' -name '*.partial' -mmin +1440 -exec rm -f {} +"
+nas "$SUDO find '$NAS_DIR' -name '*.partial' -mmin +1440 -exec rm -f {} +"
 
 log "done $STAMP"

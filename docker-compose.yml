@@ -65,6 +65,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     # Cache and file locking only: nothing here has to survive a restart.
+    # No maxmemory: with an eviction policy Redis may drop a file-lock key
+    # under memory pressure. Cache and lock keys carry a TTL and expire.
     # No password and no published port: only the containers of this stack
     # can reach it. (Nextcloud's redis.config.php reads a password file as
     # www-data at runtime, which a mode-600 bind-mounted secret blocks.)
@@ -76,10 +78,6 @@ services:
       - ""
       - --appendonly
       - "no"
-      - --maxmemory
-      - 512mb
-      - --maxmemory-policy
-      - volatile-lru
     healthcheck:
       test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 15s
