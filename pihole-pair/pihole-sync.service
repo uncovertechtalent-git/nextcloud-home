@@ -1,0 +1,16 @@
+[Unit]
+Description=Copy the primary Pi-hole's lists and DNS settings to this one
+After=network-online.target pihole-FTL.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pihole-sync/sync.env
+ExecStart=/usr/bin/python3 /usr/local/sbin/pihole-sync
+# The sync talks to two web APIs and writes nothing to disk.
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+TimeoutStartSec=20min
