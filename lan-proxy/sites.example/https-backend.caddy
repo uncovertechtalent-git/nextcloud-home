@@ -1,0 +1,13 @@
+# A backend that speaks HTTPS with a self-signed certificate (a Pi-hole web
+# interface, for example). Caddy talks TLS to it without checking the
+# certificate; the browser sees the real wildcard certificate. The Pi-hole web
+# interface lives under /admin/, so the bare name is sent there.
+@pihole host pihole.{$LAN_DOMAIN}
+handle @pihole {
+	redir / /admin/ 302
+	reverse_proxy https://pihole-address {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}

@@ -16,7 +16,7 @@ jobs:
       - name: shellcheck
         run: |
           shellcheck -s bash backup/nextcloud-backup.sh
-          shellcheck -s sh scripts/*.sh
+          shellcheck -s sh scripts/*.sh lan-proxy/scripts/*.sh
       - name: compose file parses with a fresh .env and fresh secrets
         run: |
           cp .env.example .env
@@ -26,3 +26,17 @@ jobs:
         run: |
           sudo install -m 755 backup/nextcloud-backup.sh /usr/local/sbin/nextcloud-backup
           systemd-analyze verify backup/nextcloud-backup.service backup/nextcloud-backup.timer
+      - name: lan-proxy builds, compose parses, Caddyfile and examples validate
+        run: |
+          cd lan-proxy
+          cp .env.example .env
+          mkdir -p secrets sites
+          printf 'AWS_REGION=us-east-1\n' > secrets/aws.env
+          docker compose config -q
+          cp sites.example/*.caddy sites/
+          docker build -t lan-proxy-caddy:ci .
+          docker run --rm -e LAN_DOMAIN=lan.example.org -e ROUTE53_ZONE_ID=ZXXXXXXXXXXXXX \
+            -e ACME_CA=https://acme-staging-v02.api.letsencrypt.org/directory \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/sites:/etc/caddy/sites:ro" \
+            lan-proxy-caddy:ci caddy validate --config /etc/caddy/Caddyfile
+          docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" lan-proxy-caddy:ci caddy fmt --diff /etc/caddy/Caddyfile

@@ -1,0 +1,9 @@
+# Nextcloud on the same machine, port 8380. The extra lines are the ones
+# Nextcloud's own checks ask for behind a proxy.
+@nextcloud host nextcloud.{$LAN_DOMAIN}
+handle @nextcloud {
+	header Strict-Transport-Security "max-age=15552000"
+	redir /.well-known/carddav /remote.php/dav 301
+	redir /.well-known/caldav /remote.php/dav 301
+	reverse_proxy 127.0.0.1:8380
+}

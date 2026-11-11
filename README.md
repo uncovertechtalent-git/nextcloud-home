@@ -10,6 +10,7 @@ docker-compose.yml     the stack: MariaDB, Redis, Nextcloud (Apache), a cron con
 scripts/
   init-secrets.sh      creates ./secrets, one random password per file
   post-install.sh      settings and the five apps, run once after the first start
+lan-proxy/             Caddy as the front door: names and one wildcard HTTPS certificate (own README)
 backup/
   nextcloud-backup.sh      the nightly job (runs as root)
   nextcloud-backup.service systemd unit for the job
@@ -25,7 +26,7 @@ backup/
 | Database | `mariadb:10.11` (LTS), `READ-COMMITTED` | The supported, well-tested pairing. |
 | Cache and locks | `redis:7-alpine`, no password, no published port, no memory limit | Only containers of this stack can reach it. A password file does not work here: Nextcloud reads it at run time as the web user, and a mode-600 secret is unreadable to that user. A memory limit with an eviction policy could drop a file-lock key under pressure, so there is none; cache and lock keys expire on their own. |
 | Background jobs | a second container runs `cron.php` | The "cron" mode, as Nextcloud recommends. |
-| Port | host port `8380` (`NC_PORT`), plain HTTP | Pick any free high port. TLS is a separate step, see "Not done". |
+| Port | host port `8380` (`NC_PORT`), plain HTTP | Pick any free high port. HTTPS and a name come from the reverse proxy in `lan-proxy/`; the port stays plain HTTP behind it. |
 | Exposure | bound to all interfaces of the machine; no router port forward, no public DNS | The LAN interface and the Tailscale interface are the two ways in. This holds only while the machine has no other routable interface and the router forwards nothing to it. If that changes, bind to the specific addresses (`NC_BIND_ADDRESS`, one port mapping per address) or add a host firewall. |
 | Secrets | files under `./secrets` (directory 700, files 600), passed in with compose secrets and the images' `*_FILE` variables | No password in the compose file, in `.env`, in the repo, or in a command line. |
 | Data | bind mounts `./data`, `./html`, `./db` next to the compose file | Easy to find and to back up. |
@@ -57,7 +58,27 @@ docker compose exec -u www-data app php occ config:system:get trusted_domains
 
 Log in at `http://<lan-address>:8380` or `http://<tailscale-address>:8380` as `admin`. The first password is in `secrets/admin_password`. It only seeds the install: after you change it in the web interface, the file is out of date. Create a personal account and keep `admin` for administration.
 
-`docker compose ps` should show all four services healthy. In the web interface, Administration settings, Overview lists what Nextcloud itself thinks is wrong. On this HTTP-only setup it will report the missing HTTPS and HSTS, the missing Talk backend and the unset mail server; those are known.
+`docker compose ps` should show all four services healthy. In the web interface, Administration settings, Overview lists what Nextcloud itself thinks is wrong. On the plain HTTP port it will report the missing HTTPS and HSTS, and in any case the missing Talk backend and the unset mail server; those are known.
+
+### Behind a reverse proxy
+
+`lan-proxy/` puts Caddy in front of this stack and serves it under a name with a real certificate. Nextcloud needs to be told three things, all in `.env` (the commented lines in `.env.example`), plus the name in `trusted_domains`:
+
+```sh
+NC_PROTOCOL=https
+NC_OVERWRITE_HOST=nextcloud.lan.example.org
+NC_OVERWRITE_CLI_URL=https://nextcloud.lan.example.org
+NC_TRUSTED_PROXIES=<address of the proxy as Nextcloud sees it>
+```
+
+With Caddy on the same machine, Nextcloud sees the gateway of the compose network as the client: read it with `docker network inspect nextcloud_default` and check it again if you ever recreate the network. Then:
+
+```sh
+docker compose exec -u www-data app php occ config:system:set trusted_domains 4 --value=nextcloud.lan.example.org
+docker compose up -d
+```
+
+Use the name from then on. The plain `http://<address>:<port>` still answers, but Nextcloud now writes `https://<name>` links, so log in through the name (and point sync clients at it).
 
 ### Update
 
@@ -207,7 +228,7 @@ To get a single file back without a full restore, extract just that path from th
 
 ## Not done
 
-- **TLS.** The login travels in clear text inside your network. A reverse proxy with a certificate comes later; then set `NC_PROTOCOL=https` and recreate the containers.
+- **TLS on the Nextcloud port itself.** The login travels in clear text on `http://<address>:<port>`. Use the name served by `lan-proxy/` (HTTPS) and keep the port off any network you do not trust.
 - **Talk high-performance backend**, **Office/Collabora**, **mail**.
 - **Single sign-on.** Nextcloud can be the OIDC provider for other services (the "OIDC Identity Provider" app); not set up.
 - **Alerting on a stale backup**, see "Watch it".

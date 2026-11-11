@@ -1,0 +1,37 @@
+# Caddy as the one front door for the services on a home LAN and a tailnet.
+# See README.md in this folder.
+#
+# Host networking: Caddy has to bind ports 80 and 443 of the machine and reach
+# services that listen on the machine's own addresses and on other hosts.
+
+name: lan-proxy
+
+services:
+  caddy:
+    build: .
+    image: lan-proxy-caddy:local
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ./secrets/aws.env          # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+    environment:
+      LAN_DOMAIN: ${LAN_DOMAIN:?set LAN_DOMAIN in .env}
+      ROUTE53_ZONE_ID: ${ROUTE53_ZONE_ID:?set ROUTE53_ZONE_ID in .env}
+      ACME_CA: ${ACME_CA:-https://acme-v02.api.letsencrypt.org/directory}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro
+      - ./data:/data                # certificates and the ACME account
+      - ./config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

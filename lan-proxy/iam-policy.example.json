@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ChangeTheChallengeRecordOnly",
+      "Effect": "Allow",
+      "Action": "route53:ChangeResourceRecordSets",
+      "Resource": "arn:aws:route53:::hostedzone/__ZONE_ID__",
+      "Condition": {
+        "ForAllValues:StringEquals": {
+          "route53:ChangeResourceRecordSetsNormalizedRecordNames": ["_acme-challenge.__LAN_DOMAIN__"],
+          "route53:ChangeResourceRecordSetsRecordTypes": ["TXT"],
+          "route53:ChangeResourceRecordSetsActions": ["CREATE", "UPSERT", "DELETE"]
+        }
+      }
+    },
+    {
+      "Sid": "ListTheZone",
+      "Effect": "Allow",
+      "Action": "route53:ListResourceRecordSets",
+      "Resource": "arn:aws:route53:::hostedzone/__ZONE_ID__"
+    },
+    {
+      "Sid": "WaitForTheChange",
+      "Effect": "Allow",
+      "Action": "route53:GetChange",
+      "Resource": "arn:aws:route53:::change/*"
+    }
+  ]
+}
