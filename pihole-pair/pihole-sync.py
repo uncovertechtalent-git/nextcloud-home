@@ -17,7 +17,9 @@ secondary, and the script refuses to send anything else to the primary.
 Settings come from the environment (see pihole-sync.env.example):
   PRIMARY_URL, SECONDARY_URL        base URLs ending in /api
   PRIMARY_PASSWORD_FILE, SECONDARY_PASSWORD_FILE   optional, only if a
-                                    password is set on that Pi-hole
+                                    password is set on that Pi-hole; the file
+                                    must be readable by the user the script runs
+                                    as (see README.md)
 Use --dry-run to print the differences and change nothing.
 Exit codes: 0 in sync (or synced), 1 primary or secondary unreachable,
 2 refused or failed.
@@ -49,16 +51,25 @@ def log(msg):
     print(msg, flush=True)
 
 
+class SecretError(Exception):
+    pass
+
+
 def read_secret(var):
     path = os.environ.get(var)
     if not path:
         return None
-    with open(path) as f:
-        return f.read().strip()
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError as e:
+        raise SecretError("cannot read the password file named in %s (%s): %s" % (var, path, e.strerror))
 
 
 def call(base, method, path, body=None, sid=None, raw=None, content_type=None, timeout=30):
-    if base == PRIMARY and method != "GET" and not (method == "POST" and path == "/auth"):
+    # Logging in and out is a session, not a change: the only non-GET requests
+    # the primary may receive.
+    if base == PRIMARY and method != "GET" and not (path == "/auth" and method in ("POST", "DELETE")):
         raise SystemExit("refusing to send %s %s to the primary" % (method, path))
     data = None
     headers = {}
@@ -166,18 +177,25 @@ def main():
         return 2
     psid = ssid = None
     try:
-        try:
-            psid = login(PRIMARY, "PRIMARY_PASSWORD_FILE")
-            src = snapshot(PRIMARY, psid)
-        except (urllib.error.URLError, OSError) as e:
-            log("primary unreachable, nothing changed: %s" % e)
-            return 1
-        try:
-            ssid = login(SECONDARY, "SECONDARY_PASSWORD_FILE")
-            dst = snapshot(SECONDARY, ssid)
-        except (urllib.error.URLError, OSError) as e:
-            log("secondary unreachable: %s" % e)
-            return 1
+        for name, base, var in (("primary", PRIMARY, "PRIMARY_PASSWORD_FILE"), ("secondary", SECONDARY, "SECONDARY_PASSWORD_FILE")):
+            try:
+                sid = login(base, var)
+                if name == "primary":
+                    psid = sid
+                    src = snapshot(base, sid)
+                else:
+                    ssid = sid
+                    dst = snapshot(base, sid)
+            except SecretError as e:
+                log(str(e))
+                return 2
+            except urllib.error.HTTPError as e:
+                hint = " (wrong or missing password?)" if e.code in (401, 403) else ""
+                log("%s answered HTTP %d on %s%s, nothing changed" % (name, e.code, e.url, hint))
+                return 2
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                log("%s unreachable, nothing changed: %s" % (name, e))
+                return 1
 
         if not src["lists"] or not src["groups"]:
             log("the primary shows no adlists or no groups; refusing to copy an empty-looking source")

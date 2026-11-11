@@ -46,6 +46,8 @@ Two things worth knowing from testing it with deliberate drift on the secondary 
 - a Teleporter import makes FTL on the secondary restart a moment after it returns; the script waits for the API, and counts a gravity update as done only when its output ends with `Done.`
 - each machine rebuilds gravity on its own weekly schedule, so the number of blocked domains can differ slightly between the two when the upstream lists changed in between. The lists are the same; the compiled counts are not.
 
+Prerequisites: Python 3 on the secondary, and the same Pi-hole version on both machines, or a newer one on the secondary. A Teleporter archive is not guaranteed to import across a version gap in the other direction. Tested with FTL 6.5 on the primary and 6.6.2 on the secondary.
+
 Install on the secondary:
 
 ```sh
@@ -60,7 +62,19 @@ sudo systemctl enable --now pihole-sync.timer
 
 From then on, **edit only the primary**. Whatever you change by hand on the secondary in the synced areas is undone at the next run.
 
-If a password is set on a Pi-hole, put it (or an app password) in a root-readable file and name it in `sync.env` (`PRIMARY_PASSWORD_FILE`, `SECONDARY_PASSWORD_FILE`).
+If a password is set on a Pi-hole, the service needs it, and the service does not run as root (`DynamicUser=yes`), so a root-only file would not be readable. Use systemd credentials: keep the password in a root-only file and let systemd hand it to the service. `sudo systemctl edit pihole-sync.service`:
+
+```ini
+[Service]
+LoadCredential=primary-password:/etc/pihole-sync/primary-password
+LoadCredential=secondary-password:/etc/pihole-sync/secondary-password
+Environment=PRIMARY_PASSWORD_FILE=%d/primary-password
+Environment=SECONDARY_PASSWORD_FILE=%d/secondary-password
+```
+
+(`%d` is the directory systemd puts the credentials in. Leave out the lines for a Pi-hole without a password.) The files can be `root:root`, mode 600; an app password works as well. Tested with a password on the secondary: login, sync and logout work. If the file cannot be read, the script says so and exits 2.
+
+Tests: `python3 -m unittest pihole-pair/test_pihole_sync.py` runs the script against two fake Pi-hole APIs (in sync, drift repaired with passwords on both, empty source refused, wrong password, unreadable password file, unreachable primary, same address).
 
 ## Clients
 
