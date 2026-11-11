@@ -1,0 +1,135 @@
+# Nextcloud for a home LAN and a tailnet. See README.md.
+#
+# No password appears in this file or in .env: every secret is a file under
+# ./secrets (made by scripts/init-secrets.sh) and reaches the containers
+# through compose secrets and the images' *_FILE variables.
+
+name: nextcloud
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-nextcloud-env: &nextcloud-env
+  MYSQL_HOST: db
+  MYSQL_DATABASE: nextcloud
+  MYSQL_USER: nextcloud
+  MYSQL_PASSWORD_FILE: /run/secrets/db_password
+  REDIS_HOST: redis
+  NEXTCLOUD_ADMIN_USER: admin
+  NEXTCLOUD_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+  NEXTCLOUD_TRUSTED_DOMAINS: ${NC_TRUSTED_DOMAINS:?set NC_TRUSTED_DOMAINS in .env}
+  OVERWRITEPROTOCOL: ${NC_PROTOCOL:-http}
+  PHP_MEMORY_LIMIT: 1G
+  PHP_UPLOAD_LIMIT: 10G
+  TZ: ${TZ:-Europe/Berlin}
+
+x-nextcloud-volumes: &nextcloud-volumes
+  - ./html:/var/www/html
+  - ./data:/var/www/html/data
+
+x-nextcloud-secrets: &nextcloud-secrets
+  - admin_password
+  - db_password
+
+services:
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    command:
+      - --transaction-isolation=READ-COMMITTED
+      - --innodb-read-only-compressed=OFF
+    environment:
+      MARIADB_DATABASE: nextcloud
+      MARIADB_USER: nextcloud
+      MARIADB_PASSWORD_FILE: /run/secrets/db_password
+      MARIADB_ROOT_PASSWORD_FILE: /run/secrets/db_root_password
+      MARIADB_AUTO_UPGRADE: "1"
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./db:/var/lib/mysql
+    secrets:
+      - db_password
+      - db_root_password
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Cache and file locking only: nothing here has to survive a restart.
+    # No password and no published port: only the containers of this stack
+    # can reach it. (Nextcloud's redis.config.php reads a password file as
+    # www-data at runtime, which a mode-600 bind-mounted secret blocks.)
+    command:
+      - redis-server
+      - --protected-mode
+      - "no"
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - volatile-lru
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *logging
+
+  app:
+    image: nextcloud:35-apache
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${NC_BIND_ADDRESS:-0.0.0.0}:${NC_PORT:-8380}:80"
+    environment: *nextcloud-env
+    volumes: *nextcloud-volumes
+    secrets: *nextcloud-secrets
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost/status.php | grep -q '\"installed\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    logging: *logging
+
+  # Runs cron.php every five minutes, the "cron" background job mode.
+  cron:
+    image: nextcloud:35-apache
+    restart: unless-stopped
+    entrypoint: /cron.sh
+    depends_on:
+      app:
+        condition: service_healthy
+    environment: *nextcloud-env
+    volumes: *nextcloud-volumes
+    secrets: *nextcloud-secrets
+    healthcheck:
+      test: ["CMD-SHELL", "pidof busybox >/dev/null"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+    logging: *logging
+
+secrets:
+  admin_password:
+    file: ./secrets/admin_password
+  db_password:
+    file: ./secrets/db_password
+  db_root_password:
+    file: ./secrets/db_root_password
