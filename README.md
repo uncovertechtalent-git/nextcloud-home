@@ -4,6 +4,8 @@ Nextcloud for a home: files, calendar, contacts, chat and video calls (Talk), no
 
 It is not the Nextcloud all-in-one image. That image wants a public domain and brings its own reverse proxy; this install has neither.
 
+The repository also holds the two pieces that put this and other home services on names and make the DNS behind them redundant: `lan-proxy/` (Caddy with a wildcard HTTPS certificate, names instead of `host:port`) and `pihole-pair/` (a pair of Pi-hole machines with failover and a one-way sync). Each has its own README.
+
 ```
 docker-compose.yml     the stack: MariaDB, Redis, Nextcloud (Apache), a cron container
 .env.example           port, bind address, trusted hosts. No secrets.
@@ -11,6 +13,7 @@ scripts/
   init-secrets.sh      creates ./secrets, one random password per file
   post-install.sh      settings and the five apps, run once after the first start
 lan-proxy/             Caddy as the front door: names and one wildcard HTTPS certificate (own README)
+pihole-pair/           two Pi-hole v6 machines as one resolver: keepalived pattern, one-way sync (own README)
 backup/
   nextcloud-backup.sh      the nightly job (runs as root)
   nextcloud-backup.service systemd unit for the job
