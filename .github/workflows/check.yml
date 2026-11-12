@@ -25,7 +25,13 @@ jobs:
       - name: systemd units verify
         run: |
           sudo install -m 755 backup/nextcloud-backup.sh /usr/local/sbin/nextcloud-backup
-          systemd-analyze verify backup/nextcloud-backup.service backup/nextcloud-backup.timer
+          sudo install -m 755 pihole-pair/pihole-sync.py /usr/local/sbin/pihole-sync
+          sudo install -d /etc/pihole-sync
+          sudo install -m 644 pihole-pair/pihole-sync.env.example /etc/pihole-sync/sync.env
+          systemd-analyze verify backup/nextcloud-backup.service backup/nextcloud-backup.timer \
+            pihole-pair/pihole-sync.service pihole-pair/pihole-sync.timer
+      - name: pihole-pair tests
+        run: python3 -m unittest pihole-pair/test_pihole_sync.py
       - name: lan-proxy builds, compose parses, Caddyfile and examples validate
         run: |
           cd lan-proxy
